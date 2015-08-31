@@ -33,9 +33,16 @@ segment_info = namedtuple("segment_info", "fh part size segment_size seg_base me
 
 options = namedtuple("options", "cache_timeout verify_ssl segment_size segment_above storage_url container temp_dir client_id client_secret refresh_token")
 
+
+def dmerge(a, b):
+    for k, v in b.iteritems():
+        if isinstance(v, dict) and k in a:
+            dmerge(a[k], v)
+        else:
+            a[k] = v 
+
 class File(OrderedDict):
     def __init__(self, *args, **kwargs):
-
         fname = kwargs.pop('fname', None)
         if fname is None:
             fname = kwargs['name']
@@ -308,22 +315,24 @@ class CloudFS(object):
                 )
             data = resp.json()
             datatree = {}
+            dirs = list()
+            print("Items", len(data))
             for f in data:
                 if f['content_type'] == 'application/directory': continue
                 pathsplit = f['name'].split('/')
-                newpath = datatree
+                newpath = {}
                 n = newpath
                 for elm in pathsplit[0:-1]:
                     if elm not in n:
                         n[elm] = Directory(dirname=elm)
                     n = n[elm]
                 n[pathsplit[-1]] = File(fname=pathsplit[-1], **f)
-                datatree.update(newpath)
+                dmerge(datatree, newpath)
             self._dircache = datatree
         return self._dircache
 
-    def list_directory(self, dirpath):
-        dircache = self._cache_directory()
+    def list_directory(self, dirpath, cached = True):
+        dircache = self._cache_directory(not cached)
         spl = dirpath.split('/')
         n = dircache
         for e in spl:
@@ -391,10 +400,16 @@ class CloudFS(object):
             for pfx, chunk, data in _get_parts(stream, 
                     self.CHUNKS_FOLDER + path, self.MAX_FILE_CHUNK_SIZE, streamsize):
                 self.create_directory(self.CHUNKS_FOLDER + '/' + path)
+                f, d = self.list_directory(self.CHUNKS_FOLDER + '/' + path)
+                
                 headers['X-Auth-Token'] = self.storage_token
                 pathbuild = '{}/{}/{}/{}'.format(self.default_container, 
                         self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
                 url = u'{}/{}'.format(self.storage_url, pathbuild)
+                existobj = self._send_request('HEAD', url)
+                if existobj.status_code < 400:
+                    print(existobj.headers)
+                    continue
                 t = Thread(target=_file_uploader,
                     args=(url, headers, data))
                 threads.append(t)
@@ -465,13 +480,16 @@ class Hubic(CloudFS):
 def upload_file(h, verb, local, directory, remote):
     if verb == 'create':
         try:
-            f, d = h.list_directory(directory)
+            f, d = h.list_directory(directory, cached = False)
             for a in f:
-                if a['name'].split('/')[-1] == remote:
-                    print("File exists")
+                if os.path.basename(a['name']) == remote:
+                    print("File exists", remote)
                     return
         except ValueError:
+            print("Dir does not exist", directory)
             pass
+    print("Sending ", remote)
+    return
     h.write_stream(io.FileIO(local, "rb"), "{}/{}".format(directory, remote))
     h.upload_queue()
     print("Uploaded {} to {}".format(local, directory))
@@ -492,7 +510,7 @@ if __name__ == '__main__':
     if argv[2] == 'pipe':
         tgtdir = argv[3]
         for line in sys.stdin:
-            line = line.replace('\n', '')
+            line = line.replace('\n', '').decode('utf-8')
             d = tgtdir + os.path.dirname(line)
             tgt = os.path.basename(line)
             upload_file(h, 'create', line, d, tgt)
