@@ -297,7 +297,9 @@ class CloudFS(object):
 
     def create_directory(self, label):
         """create a directory"""
-        return self._send_request('MKDIR', label)
+        r = self._send_request('MKDIR', label)
+        if r.status_code < 200 or r.status_code >= 400:
+            raise Exception("Cannot create directory")
 
     def _cache_directory(self, refresh = False):
         if refresh or self._dircache is None:
@@ -370,9 +372,17 @@ class CloudFS(object):
                 i += 1
 
         def _file_uploader(url, headers, data):
-            print("Sending %s" % (url,))
-            requests.put(url, headers = headers, data = data)
-            print("Done putting", url)
+            tries = 3
+            while tries > 0:
+                print("Sending %s" % (url,))
+                r = requests.put(url, headers = headers, data = data)
+                if r.status_code < 200 or r.status_code >= 400:
+                    tries -= 1
+                    continue
+                else:
+                    print("Done putting", url)
+                    return
+            raise Exception("Could not upload part " + url)
 
         queues = {}
         headers = {}
@@ -382,7 +392,9 @@ class CloudFS(object):
                     self.CHUNKS_FOLDER + path, self.MAX_FILE_CHUNK_SIZE, streamsize):
                 self.create_directory(self.CHUNKS_FOLDER + '/' + path)
                 headers['X-Auth-Token'] = self.storage_token
-                url = u'{}/{}/{}/{}/{}'.format(self.storage_url, self.default_container, self.CHUNKS_FOLDER, path, chunk)
+                pathbuild = '{}/{}/{}/{}'.format(self.default_container, 
+                        self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
+                url = u'{}/{}'.format(self.storage_url, pathbuild)
                 t = Thread(target=_file_uploader,
                     args=(url, headers, data))
                 threads.append(t)
@@ -390,7 +402,8 @@ class CloudFS(object):
                 while len([_ for _ in threads if _.isAlive()]) > self.MAX_UPLOAD_THREADS:
                     sleep(0.5)
                     print("waiting")
-            url = u'{}/{}/{}'.format(self.storage_url, self.default_container, path)
+            pathbuild = "{}/{}".format(self.default_container, path).replace("//", "/")
+            url = u'{}/{}'.format(self.storage_url, pathbuild)
             headers['X-Object-Manifest'] = '{}/{}/{}/'.format(self._default_container, self.CHUNKS_FOLDER, path)
             headers['Content-Type'] = 'application/octet-stream'
             requests.put(url, headers = headers, data = '')
@@ -399,6 +412,7 @@ class CloudFS(object):
         for t in threads: t.join()
         print("Done joining laties")
         self._uploadqueue.clear()
+
     def __init__(self, parameters = {}):
         # initialize structures
         self.statcache = dict()
