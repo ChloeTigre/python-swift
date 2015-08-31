@@ -480,7 +480,7 @@ class Hubic(CloudFS):
 def upload_file(h, verb, local, directory, remote):
     if verb == 'create':
         try:
-            f, d = h.list_directory(directory, cached = False)
+            f, d = h.list_directory(directory)
             for a in f:
                 if os.path.basename(a['name']) == remote:
                     print("File exists", remote)
@@ -489,7 +489,6 @@ def upload_file(h, verb, local, directory, remote):
             print("Dir does not exist", directory)
             pass
     print("Sending ", remote)
-    return
     h.write_stream(io.FileIO(local, "rb"), "{}/{}".format(directory, remote))
     h.upload_queue()
     print("Uploaded {} to {}".format(local, directory))
