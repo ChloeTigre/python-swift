@@ -397,18 +397,17 @@ class CloudFS(object):
         headers = {}
         threads = []
         for path, stream, streamsize in self._uploadqueue:
+            self.create_directory(self.CHUNKS_FOLDER + '/' + path)
             for pfx, chunk, data in _get_parts(stream, 
                     self.CHUNKS_FOLDER + path, self.MAX_FILE_CHUNK_SIZE, streamsize):
-                self.create_directory(self.CHUNKS_FOLDER + '/' + path)
-                f, d = self.list_directory(self.CHUNKS_FOLDER + '/' + path)
                 
                 headers['X-Auth-Token'] = self.storage_token
-                pathbuild = '{}/{}/{}/{}'.format(self.default_container, 
-                        self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
-                url = u'{}/{}'.format(self.storage_url, pathbuild)
-                existobj = self._send_request('HEAD', url)
+                pathbuild = '{}/{}/{}'.format(self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
+                url = '{}/{}/{}'.format(self.storage_token, self.default_container, pathbuild)
+                existobj = self._send_request('HEAD', pathbuild)
+                print('HEAD', url, existobj.headers, existobj.status_code)
                 if existobj.status_code < 400:
-                    print(existobj.headers)
+                    print("Chunk exists!", url, existobj.headers)
                     continue
                 t = Thread(target=_file_uploader,
                     args=(url, headers, data))
@@ -488,7 +487,7 @@ def upload_file(h, verb, local, directory, remote):
         except ValueError:
             print("Dir does not exist", directory)
             pass
-    print("Sending ", remote)
+    print("UPLOAD FILE Sending ", remote)
     h.write_stream(io.FileIO(local, "rb"), "{}/{}".format(directory, remote))
     h.upload_queue()
     print("Uploaded {} to {}".format(local, directory))
