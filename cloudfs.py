@@ -20,6 +20,9 @@ from time import sleep
 from datetime import datetime
 import copy
 import sys
+import hashlib
+import codecs
+
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
 #define MAX_PATH_SIZE (1024 + 256 + 3)
@@ -374,11 +377,13 @@ class CloudFS(object):
             #a = stream.read(sz)
             i = 0
             #while len(a) > 0:
-            while True:
-                d = stream.read(sz)
-                if len(d) == 0: break
-                yield (pfx, str(i).zfill(partstrlen), d)
+            while keep_going:
+                d = lambda: stream.read(sz)
+                a = lambda: stream.seek(sz, 1)
+                #if len(d) == 0: break
+                yield (pfx, str(i).zfill(partstrlen), d, a)
                 i += 1
+            print("Done getting parts")
 
         def _file_uploader(url, headers, data):
             tries = 3
@@ -398,27 +403,35 @@ class CloudFS(object):
         threads = []
         for path, stream, streamsize in self._uploadqueue:
             self.create_directory(self.CHUNKS_FOLDER + '/' + path)
-            for pfx, chunk, data in _get_parts(stream, 
+	    keep_going = True
+            for pfx, chunk, data_loader, data_skipper in _get_parts(stream, 
                     self.CHUNKS_FOLDER + path, self.MAX_FILE_CHUNK_SIZE, streamsize):
                 
                 headers['X-Auth-Token'] = self.storage_token
-                pathbuild = '{}/{}/{}'.format(self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
-                url = '{}/{}/{}'.format(self.storage_token, self.default_container, pathbuild)
+                pathbuild = u'{}/{}/{}'.format(self.CHUNKS_FOLDER, path, chunk).replace('//', '/')
+                url = u'{}/{}/{}'.format(self.storage_url, self.default_container, pathbuild).encode('utf-8')
                 existobj = self._send_request('HEAD', pathbuild)
-                print('HEAD', url, existobj.headers, existobj.status_code)
                 if existobj.status_code < 400:
-                    print("Chunk exists!", url, existobj.headers)
+                    print("Chunk exists!", path, chunk)
+                    data_skipper()
                     continue
+		data_bytes = data_loader()
+		if len(data_bytes) == 0:
+                    print("EOF for ", path)
+                    keep_going = False
+                    continue
+                else:
+                    print("Send chunk of", len(data_bytes), path, hashlib.sha1(data_bytes).hexdigest())
+
                 t = Thread(target=_file_uploader,
-                    args=(url, headers, data))
+                    args=(url, headers, data_bytes))
                 threads.append(t)
                 t.start()
                 while len([_ for _ in threads if _.isAlive()]) > self.MAX_UPLOAD_THREADS:
                     sleep(0.5)
-                    print("waiting")
-            pathbuild = "{}/{}".format(self.default_container, path).replace("//", "/")
-            url = u'{}/{}'.format(self.storage_url, pathbuild)
-            headers['X-Object-Manifest'] = '{}/{}/{}/'.format(self._default_container, self.CHUNKS_FOLDER, path)
+            pathbuild = u"{}/{}".format(self.default_container, path).replace("//", "/")
+            url = u'{}/{}'.format(self.storage_url, pathbuild).encode('utf-8')
+            headers['X-Object-Manifest'] = u'{}/{}/{}/'.format(self._default_container, self.CHUNKS_FOLDER, path).encode('utf-8')
             headers['Content-Type'] = 'application/octet-stream'
             requests.put(url, headers = headers, data = '')
             print("Created item")
@@ -487,10 +500,10 @@ def upload_file(h, verb, local, directory, remote):
         except ValueError:
             print("Dir does not exist", directory)
             pass
-    print("UPLOAD FILE Sending ", remote)
-    h.write_stream(io.FileIO(local, "rb"), "{}/{}".format(directory, remote))
+    print(u"UPLOAD FILE Sending ", remote)
+    h.write_stream(io.FileIO(local, "rb"), u"{}/{}".format(directory, remote))
     h.upload_queue()
-    print("Uploaded {} to {}".format(local, directory))
+    print(u"Uploaded {} to {}".format(local, directory))
 
 
 if __name__ == '__main__':
@@ -506,9 +519,10 @@ if __name__ == '__main__':
     h = Hubic(client_id, client_secret, ref_token)
     h.connect()
     if argv[2] == 'pipe':
-        tgtdir = argv[3]
+        tgtdir = argv[3].decode('utf-8')
+	sys.stdin = codecs.getreader("utf-8")(sys.stdin)
         for line in sys.stdin:
-            line = line.replace('\n', '').decode('utf-8')
+            line = line.replace('\n', '')
             d = tgtdir + os.path.dirname(line)
             tgt = os.path.basename(line)
             upload_file(h, 'create', line, d, tgt)
