@@ -298,6 +298,14 @@ class CloudFS(object):
             (response.status_code == 409 and method == 'DELETE')):
                 self._header_dispatch(response.headers)
                 return response
+            else:
+                print("Request error!")
+                try:
+                    print('headers', response.headers)
+                    print('status', response.status_code)
+                    print('body', response.content)
+                except:
+                    print("Bad response", response)
             tries -= 1
         return response
 
@@ -464,12 +472,23 @@ class Hubic(CloudFS):
         token_url = "https://api.hubic.com/oauth/token"
         creds_url = "https://api.hubic.com/1.0/account/credentials"
         req = {"refresh_token": self.refresh_token, "grant_type": "refresh_token" }
-        response = requests.post(token_url, auth=(
-            self.client_id,
-            self.client_secret
-            ),
-            data=req)
-        r = response.json()
+        try:
+            response = requests.post(token_url, auth=(
+                self.client_id,
+                self.client_secret
+                ),
+                data=req)
+            r = response.json()
+        except:
+            print("Starting over")
+            try:
+                print("status", response.status_code)
+                print("headers", response.headers)
+                print("body", response.content)
+            except:
+                print("bad response", response)
+            sleep(10)
+            return self.connect()
         access_token = r['access_token']
         token_type = r['token_type']
         expires_in = r['expires_in']
